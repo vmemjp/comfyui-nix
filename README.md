@@ -1,4 +1,4 @@
-# comfyui-nix
+# comfyui-flake
 
 A Nix Flake for running [ComfyUI](https://github.com/Comfy-Org/ComfyUI) on Linux with direnv support.
 
@@ -27,8 +27,8 @@ ComfyUI Desktop does not ship Linux builds. This flake provides a reproducible, 
 The fastest way -- one command to initialize and launch:
 
 ```bash
-git clone https://github.com/vmemjp/comfyui-nix
-cd comfyui-nix
+git clone https://github.com/vmemjp/comfyui-flake
+cd comfyui-flake
 nix run .
 ```
 
