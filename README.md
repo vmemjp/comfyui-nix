@@ -24,18 +24,25 @@ ComfyUI Desktop does not ship Linux builds. This flake provides a reproducible, 
 
 ## Quick Start
 
+The fastest way -- one command to initialize and launch:
+
 ```bash
 git clone https://github.com/vmemjp/comfyui-nix
 cd comfyui-nix
+nix run .
+```
 
-# Enter the dev shell
-nix develop  # or use direnv: echo 'use flake' > .envrc && direnv allow
+On the first run, this automatically sets up the venv, installs dependencies, and starts ComfyUI.
 
-# Initialize (downloads ComfyUI source, creates venv, installs dependencies)
-comfyui-init
+### Using a dev shell (alternative)
 
-# Run
-comfyui
+If you prefer separate init/run steps, or use direnv:
+
+```bash
+nix develop  # or: echo 'use flake' > .envrc && direnv allow
+
+comfyui-init  # first-time setup
+comfyui       # start ComfyUI
 ```
 
 ComfyUI starts at `http://127.0.0.1:8188` by default.
@@ -44,9 +51,10 @@ ComfyUI starts at `http://127.0.0.1:8188` by default.
 
 | Command | Description |
 |---|---|
-| `comfyui-init` | First-time setup: copy source, create venv, install dependencies |
-| `comfyui-update` | Update ComfyUI source and reinstall dependencies (preserves models, custom nodes, outputs) |
-| `comfyui` | Start ComfyUI |
+| `nix run .` | One-command bootstrap: init if needed, then start |
+| `comfyui-init` | First-time setup: copy source, create venv, install dependencies (dev shell) |
+| `comfyui-update` | Update ComfyUI source and reinstall dependencies (preserves models, custom nodes, outputs) (dev shell) |
+| `comfyui` | Start ComfyUI (dev shell) |
 
 ## Updating ComfyUI
 

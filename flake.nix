@@ -196,6 +196,72 @@
         };
       in
       {
+        apps.default = {
+          type = "app";
+          program = "${pkgs.writeShellApplication {
+            name = "comfyui-app";
+            runtimeInputs = basePkgs;
+            text = ''
+              set -euo pipefail
+
+              export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+              STATE_DIR="''${COMFYUI_STATE_DIR:-$PWD/.comfyui-state}"
+              COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
+              case "$COMFYUI_PYTHON" in
+                3.13) PY_BIN="${python313}/bin/python" ;;
+                3.12) PY_BIN="${python312}/bin/python" ;;
+                *)
+                  echo "Unsupported COMFYUI_PYTHON=$COMFYUI_PYTHON (use 3.13 or 3.12)"
+                  exit 2
+                  ;;
+              esac
+
+              COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
+              VENV_DIR="''${COMFYUI_VENV:-$STATE_DIR/venv-py$COMFYUI_PYTHON}"
+
+              # init if needed
+              if [ ! -x "$VENV_DIR/bin/python" ]; then
+                echo "First run: initializing ComfyUI..."
+                mkdir -p "$STATE_DIR"
+
+                if [ ! -d "$COMFYUI_HOME" ]; then
+                  mkdir -p "$(dirname "$COMFYUI_HOME")"
+                  cp -a "${comfyui-src}" "$COMFYUI_HOME"
+                  chmod -R u+rwX "$COMFYUI_HOME" || true
+                fi
+
+                mkdir -p "$(dirname "$VENV_DIR")"
+                uv venv "$VENV_DIR" --python "$PY_BIN"
+
+                TORCH_INDEX="https://download.pytorch.org/whl/''${COMFYUI_TORCH_VARIANT:-cu130}"
+                uv pip install --python "$VENV_DIR/bin/python" \
+                  --extra-index-url "$TORCH_INDEX" \
+                  --requirements "$COMFYUI_HOME/requirements.txt"
+
+                if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ] && [ -f "$COMFYUI_HOME/manager_requirements.txt" ]; then
+                  uv pip install --python "$VENV_DIR/bin/python" \
+                    --extra-index-url "$TORCH_INDEX" \
+                    --requirements "$COMFYUI_HOME/manager_requirements.txt"
+                fi
+              fi
+
+              cd "$COMFYUI_HOME"
+
+              if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ] && [ -f manager_requirements.txt ]; then
+                ENABLE_MANAGER_ARGS="--enable-manager"
+              else
+                ENABLE_MANAGER_ARGS=""
+              fi
+
+              LISTEN="''${COMFYUI_LISTEN:-127.0.0.1}"
+              PORT="''${COMFYUI_PORT:-8188}"
+
+              exec "$VENV_DIR/bin/python" main.py --listen "$LISTEN" --port "$PORT" $ENABLE_MANAGER_ARGS "$@"
+            '';
+          }}/bin/comfyui-app";
+        };
+
         devShells.default = pkgs.mkShell {
           packages = basePkgs ++ [ comfyui-init comfyui-update comfyui-run ];
           shellHook = ''
