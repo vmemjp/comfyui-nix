@@ -1,2 +1,4 @@
 .comfyui-state*
+.cache
 .direnv
+.venv

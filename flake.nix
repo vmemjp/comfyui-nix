@@ -1,5 +1,5 @@
 {
-  description = "ComfyUI dev env (direnv-friendly; uv; project-local state; py3.13 default w/ 3.12 switch)";
+  description = "ComfyUI dev env (uv project; separated user data; py3.13 default w/ 3.12 switch)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -18,7 +18,6 @@
         python313 = pkgs.python313;
         uv = pkgs.uv;
 
-        # 起動や依存ビルドに必要になりがちなツール
         basePkgs = with pkgs; [
           uv
           python312
@@ -38,14 +37,80 @@
           libGL
         ];
 
+        # Helper: resolve FLAKE_DIR at runtime (set by wrapper / devShell)
+        # All scripts expect FLAKE_DIR to point at the flake repo root.
+
+        setupSourceScript = ''
+          # migrate_data: move real dirs from src/ to STATE_DIR/ (existing install)
+          migrate_data() {
+            local STATE_DIR="$1"
+            local COMFYUI_HOME="$2"
+            local DATA_DIRS=(custom_nodes input output user models)
+
+            for d in "''${DATA_DIRS[@]}"; do
+              # Only migrate if it's a real directory (not already a symlink)
+              if [ -d "$COMFYUI_HOME/$d" ] && [ ! -L "$COMFYUI_HOME/$d" ]; then
+                if [ -d "$STATE_DIR/$d" ] && [ -n "$(ls -A "$STATE_DIR/$d" 2>/dev/null)" ]; then
+                  # State dir already has data — merge (src files won't overwrite)
+                  cp -a --no-clobber "$COMFYUI_HOME/$d/." "$STATE_DIR/$d/" 2>/dev/null || true
+                else
+                  mkdir -p "$STATE_DIR"
+                  mv "$COMFYUI_HOME/$d" "$STATE_DIR/$d"
+                fi
+              fi
+            done
+          }
+
+          # setup_links: create symlinks + extra_model_paths.yaml inside src/
+          setup_links() {
+            local STATE_DIR="$1"
+            local COMFYUI_HOME="$2"
+
+            # Ensure state-side dirs exist
+            local DATA_DIRS=(custom_nodes input output user models)
+            for d in "''${DATA_DIRS[@]}"; do
+              mkdir -p "$STATE_DIR/$d"
+            done
+
+            # Symlink all data dirs (custom_nodes, input, output, user, models)
+            for d in custom_nodes input output user models; do
+              rm -rf "''${COMFYUI_HOME:?}/$d"
+              ln -sfn "../$d" "$COMFYUI_HOME/$d"
+            done
+          }
+
+          # setup_source: fresh install — copy source, seed data, set up links
+          setup_source() {
+            local STATE_DIR="$1"
+            local COMFYUI_HOME="$2"
+
+            # Copy ComfyUI source
+            mkdir -p "$(dirname "$COMFYUI_HOME")"
+            cp -a "${comfyui-src}" "$COMFYUI_HOME"
+            chmod -R u+rwX "$COMFYUI_HOME" || true
+
+            # Seed user-data dirs from source defaults (only if state dir is empty)
+            local SEED_DIRS=(custom_nodes input output user models)
+            for d in "''${SEED_DIRS[@]}"; do
+              mkdir -p "$STATE_DIR/$d"
+              if [ -d "$COMFYUI_HOME/$d" ] && [ -z "$(ls -A "$STATE_DIR/$d" 2>/dev/null)" ]; then
+                cp -a "$COMFYUI_HOME/$d/." "$STATE_DIR/$d/" 2>/dev/null || true
+              fi
+            done
+
+            setup_links "$STATE_DIR" "$COMFYUI_HOME"
+          }
+        '';
+
         comfyui-init = pkgs.writeShellApplication {
           name = "comfyui-init";
           runtimeInputs = basePkgs;
           text = ''
             set -euo pipefail
 
-            # 既定: プロジェクト配下に状態を閉じる
-            STATE_DIR="''${COMFYUI_STATE_DIR:-$PWD/.comfyui-state}"
+            FLAKE_DIR="''${FLAKE_DIR:-$PWD}"
+            STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
+            COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
 
             COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
             case "$COMFYUI_PYTHON" in
@@ -57,44 +122,40 @@
                 ;;
             esac
 
-            COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
-            VENV_DIR="''${COMFYUI_VENV:-$STATE_DIR/venv-py$COMFYUI_PYTHON}"
-
             mkdir -p "$STATE_DIR"
 
-            # ComfyUI 本体を state dir に展開（store は書けない）
+            ${setupSourceScript}
+
             if [ ! -d "$COMFYUI_HOME" ]; then
-              mkdir -p "$(dirname "$COMFYUI_HOME")"
-              cp -a "${comfyui-src}" "$COMFYUI_HOME"
-              chmod -R u+rwX "$COMFYUI_HOME" || true
+              # Fresh install
+              setup_source "$STATE_DIR" "$COMFYUI_HOME"
+            elif [ -d "$COMFYUI_HOME/models" ] && [ ! -L "$COMFYUI_HOME/models" ]; then
+              # Existing install without symlinks — migrate data out, then set up links
+              echo "Migrating user data from source tree..."
+              migrate_data "$STATE_DIR" "$COMFYUI_HOME"
+              setup_links "$STATE_DIR" "$COMFYUI_HOME"
+              echo "Migration complete."
             fi
 
-            cd "$COMFYUI_HOME"
+            # Remove old per-version venvs (superseded by uv-managed .venv)
+            for old_venv in "$STATE_DIR"/venv-py*; do
+              if [ -d "$old_venv" ]; then
+                echo "Removing old venv: $old_venv"
+                rm -rf "$old_venv"
+              fi
+            done
 
-            # venv
-            if [ ! -d "$VENV_DIR" ]; then
-              mkdir -p "$(dirname "$VENV_DIR")"
-              uv venv "$VENV_DIR" --python "$PY_BIN"
-            fi
+            # Install dependencies via uv sync (project-managed venv)
+            uv sync --project "$FLAKE_DIR" --python "$PY_BIN"
 
-            # PyTorch の CUDA ビルドを指定 (cu130, cu128, cpu など)
-            TORCH_INDEX="https://download.pytorch.org/whl/''${COMFYUI_TORCH_VARIANT:-cu130}"
-
-            # 依存投入
-            uv pip install --python "$VENV_DIR/bin/python" \
-              --extra-index-url "$TORCH_INDEX" \
-              --requirements requirements.txt
-
-            # 任意: Manager
-            if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ] && [ -f manager_requirements.txt ]; then
-              uv pip install --python "$VENV_DIR/bin/python" \
-                --extra-index-url "$TORCH_INDEX" \
-                --requirements manager_requirements.txt
+            # Manager optional deps
+            if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
+              uv sync --project "$FLAKE_DIR" --python "$PY_BIN" --extra manager
             fi
 
             echo "ComfyUI ready."
             echo "  Source: $COMFYUI_HOME"
-            echo "  Venv:   $VENV_DIR"
+            echo "  Venv:   $FLAKE_DIR/.venv"
           '';
         };
 
@@ -104,61 +165,49 @@
           text = ''
             set -euo pipefail
 
-            STATE_DIR="''${COMFYUI_STATE_DIR:-$PWD/.comfyui-state}"
-            COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
-
+            FLAKE_DIR="''${FLAKE_DIR:-$PWD}"
+            STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
             COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
-            VENV_DIR="''${COMFYUI_VENV:-$STATE_DIR/venv-py$COMFYUI_PYTHON}"
+
+            COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
+            case "$COMFYUI_PYTHON" in
+              3.13) PY_BIN="${python313}/bin/python" ;;
+              3.12) PY_BIN="${python312}/bin/python" ;;
+              *)
+                echo "Unsupported COMFYUI_PYTHON=$COMFYUI_PYTHON (use 3.13 or 3.12)"
+                exit 2
+                ;;
+            esac
 
             if [ ! -d "$COMFYUI_HOME" ]; then
               echo "ComfyUI not found. Run: comfyui-init"
               exit 1
             fi
 
-            # ユーザデータを保持するディレクトリ
-            USER_DIRS=(models custom_nodes input output user)
+            ${setupSourceScript}
 
             echo "Updating ComfyUI source..."
 
-            # ユーザデータを一時退避
-            BACKUP_DIR="$(mktemp -d)"
-            trap 'rm -rf "$BACKUP_DIR"' EXIT
-            for d in "''${USER_DIRS[@]}"; do
-              if [ -d "$COMFYUI_HOME/$d" ]; then
-                mv "$COMFYUI_HOME/$d" "$BACKUP_DIR/$d"
-              fi
-            done
+            # Migrate data out if this is an old-style install
+            if [ -d "$COMFYUI_HOME/models" ] && [ ! -L "$COMFYUI_HOME/models" ]; then
+              echo "Migrating user data from source tree first..."
+              migrate_data "$STATE_DIR" "$COMFYUI_HOME"
+            fi
 
-            # ソースを差し替え
+            # User data is outside src, so we can safely replace it
             rm -rf "$COMFYUI_HOME"
-            cp -a "${comfyui-src}" "$COMFYUI_HOME"
-            chmod -R u+rwX "$COMFYUI_HOME" || true
+            setup_source "$STATE_DIR" "$COMFYUI_HOME"
 
-            # ユーザデータを復元（新しいソースのデフォルトを上書き）
-            for d in "''${USER_DIRS[@]}"; do
-              if [ -d "$BACKUP_DIR/$d" ]; then
-                rm -rf "''${COMFYUI_HOME:?}/$d"
-                mv "$BACKUP_DIR/$d" "$COMFYUI_HOME/$d"
-              fi
-            done
+            # Re-sync dependencies
+            uv sync --project "$FLAKE_DIR" --python "$PY_BIN"
 
-            # 依存を再インストール
-            cd "$COMFYUI_HOME"
-            TORCH_INDEX="https://download.pytorch.org/whl/''${COMFYUI_TORCH_VARIANT:-cu130}"
-
-            uv pip install --python "$VENV_DIR/bin/python" \
-              --extra-index-url "$TORCH_INDEX" \
-              --requirements requirements.txt
-
-            if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ] && [ -f manager_requirements.txt ]; then
-              uv pip install --python "$VENV_DIR/bin/python" \
-                --extra-index-url "$TORCH_INDEX" \
-                --requirements manager_requirements.txt
+            if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
+              uv sync --project "$FLAKE_DIR" --python "$PY_BIN" --extra manager
             fi
 
             echo "ComfyUI updated."
             echo "  Source: $COMFYUI_HOME"
-            echo "  Venv:   $VENV_DIR"
+            echo "  Venv:   $FLAKE_DIR/.venv"
           '';
         };
 
@@ -168,11 +217,10 @@
           text = ''
             set -euo pipefail
 
-            STATE_DIR="''${COMFYUI_STATE_DIR:-$PWD/.comfyui-state}"
-            COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
-
+            FLAKE_DIR="''${FLAKE_DIR:-$PWD}"
+            STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
             COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
-            VENV_DIR="''${COMFYUI_VENV:-$STATE_DIR/venv-py$COMFYUI_PYTHON}"
+            VENV_DIR="$FLAKE_DIR/.venv"
 
             if [ ! -x "$VENV_DIR/bin/python" ]; then
               echo "venv not found. Run: comfyui-init"
@@ -181,7 +229,6 @@
 
             cd "$COMFYUI_HOME"
 
-            # Manager を使うなら引数で有効化（comfyui-init が requirements を入れる想定）
             if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ] && [ -f manager_requirements.txt ]; then
               ENABLE_MANAGER_ARGS="--enable-manager"
             else
@@ -191,7 +238,9 @@
             LISTEN="''${COMFYUI_LISTEN:-127.0.0.1}"
             PORT="''${COMFYUI_PORT:-8188}"
 
-            exec "$VENV_DIR/bin/python" main.py --listen "$LISTEN" --port "$PORT" $ENABLE_MANAGER_ARGS "$@"
+            exec "$VENV_DIR/bin/python" main.py \
+              --listen "$LISTEN" --port "$PORT" \
+              $ENABLE_MANAGER_ARGS "$@"
           '';
         };
       in
@@ -206,7 +255,13 @@
 
               export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-              STATE_DIR="''${COMFYUI_STATE_DIR:-$PWD/.comfyui-state}"
+              # Detect flake directory from script location
+              FLAKE_DIR="''${FLAKE_DIR:-$PWD}"
+              export UV_CACHE_DIR="''${UV_CACHE_DIR:-$FLAKE_DIR/.cache/uv}"
+              STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
+              COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
+              VENV_DIR="$FLAKE_DIR/.venv"
+
               COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
               case "$COMFYUI_PYTHON" in
                 3.13) PY_BIN="${python313}/bin/python" ;;
@@ -217,32 +272,25 @@
                   ;;
               esac
 
-              COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
-              VENV_DIR="''${COMFYUI_VENV:-$STATE_DIR/venv-py$COMFYUI_PYTHON}"
+              ${setupSourceScript}
 
-              # init if needed
+              # Init if needed
               if [ ! -x "$VENV_DIR/bin/python" ]; then
                 echo "First run: initializing ComfyUI..."
                 mkdir -p "$STATE_DIR"
 
                 if [ ! -d "$COMFYUI_HOME" ]; then
-                  mkdir -p "$(dirname "$COMFYUI_HOME")"
-                  cp -a "${comfyui-src}" "$COMFYUI_HOME"
-                  chmod -R u+rwX "$COMFYUI_HOME" || true
+                  setup_source "$STATE_DIR" "$COMFYUI_HOME"
+                elif [ -d "$COMFYUI_HOME/models" ] && [ ! -L "$COMFYUI_HOME/models" ]; then
+                  echo "Migrating user data from source tree..."
+                  migrate_data "$STATE_DIR" "$COMFYUI_HOME"
+                  setup_links "$STATE_DIR" "$COMFYUI_HOME"
                 fi
 
-                mkdir -p "$(dirname "$VENV_DIR")"
-                uv venv "$VENV_DIR" --python "$PY_BIN"
+                uv sync --project "$FLAKE_DIR" --python "$PY_BIN"
 
-                TORCH_INDEX="https://download.pytorch.org/whl/''${COMFYUI_TORCH_VARIANT:-cu130}"
-                uv pip install --python "$VENV_DIR/bin/python" \
-                  --extra-index-url "$TORCH_INDEX" \
-                  --requirements "$COMFYUI_HOME/requirements.txt"
-
-                if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ] && [ -f "$COMFYUI_HOME/manager_requirements.txt" ]; then
-                  uv pip install --python "$VENV_DIR/bin/python" \
-                    --extra-index-url "$TORCH_INDEX" \
-                    --requirements "$COMFYUI_HOME/manager_requirements.txt"
+                if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
+                  uv sync --project "$FLAKE_DIR" --python "$PY_BIN" --extra manager
                 fi
               fi
 
@@ -257,7 +305,9 @@
               LISTEN="''${COMFYUI_LISTEN:-127.0.0.1}"
               PORT="''${COMFYUI_PORT:-8188}"
 
-              exec "$VENV_DIR/bin/python" main.py --listen "$LISTEN" --port "$PORT" $ENABLE_MANAGER_ARGS "$@"
+              exec "$VENV_DIR/bin/python" main.py \
+                --listen "$LISTEN" --port "$PORT" \
+                $ENABLE_MANAGER_ARGS "$@"
             '';
           }}/bin/comfyui-app";
         };
@@ -266,12 +316,13 @@
           packages = basePkgs ++ [ comfyui-init comfyui-update comfyui-run ];
           shellHook = ''
             export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            export FLAKE_DIR="$PWD"
+            export UV_CACHE_DIR="''${UV_CACHE_DIR:-$FLAKE_DIR/.cache/uv}"
             echo "ComfyUI dev shell"
             echo "  init  : comfyui-init"
             echo "  update: comfyui-update"
             echo "  run   : comfyui"
             echo "Switch Python: COMFYUI_PYTHON=3.12  (default 3.13)"
-            echo "Switch torch:  COMFYUI_TORCH_VARIANT=cu128 (default cu130)"
           '';
         };
       });

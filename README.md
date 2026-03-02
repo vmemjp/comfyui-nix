@@ -6,9 +6,9 @@ ComfyUI Desktop does not ship Linux builds. This flake provides a reproducible, 
 
 ## Features
 
-- **Project-local state** -- all runtime data (source, venv, models, custom nodes) stays under `.comfyui-state/`
+- **Reproducible dependencies** -- `pyproject.toml` + `uv.lock` ensure exact, lockfile-pinned installs via `uv sync`
+- **Separated user data** -- models (86GB+), custom_nodes, input, output, user live outside the source tree under `.comfyui-state/`, so updates are a simple source replacement
 - **Python version switching** -- Python 3.13 (default) or 3.12 via environment variable
-- **PyTorch CUDA variant selection** -- cu130 (default), cu128 (Blackwell), or cpu
 - **direnv-friendly** -- drop an `.envrc` with `use flake` and everything is ready
 - **ComfyUI Manager** enabled by default
 
@@ -32,7 +32,7 @@ cd comfyui-flake
 nix run .
 ```
 
-On the first run, this automatically sets up the venv, installs dependencies, and starts ComfyUI.
+On the first run, this automatically sets up the venv via `uv sync`, installs dependencies, and starts ComfyUI.
 
 ### Using a dev shell (alternative)
 
@@ -52,8 +52,8 @@ ComfyUI starts at `http://127.0.0.1:8188` by default.
 | Command | Description |
 |---|---|
 | `nix run .` | One-command bootstrap: init if needed, then start |
-| `comfyui-init` | First-time setup: copy source, create venv, install dependencies (dev shell) |
-| `comfyui-update` | Update ComfyUI source and reinstall dependencies (preserves models, custom nodes, outputs) (dev shell) |
+| `comfyui-init` | First-time setup: copy source, create symlinks, `uv sync` dependencies (dev shell) |
+| `comfyui-update` | Update ComfyUI source and re-sync dependencies (user data is untouched) (dev shell) |
 | `comfyui` | Start ComfyUI (dev shell) |
 
 ## Updating ComfyUI
@@ -66,7 +66,7 @@ nix flake update comfyui-src
 comfyui-update
 ```
 
-`comfyui-update` preserves user data directories (`models/`, `custom_nodes/`, `input/`, `output/`, `user/`) while replacing the ComfyUI source.
+`comfyui-update` replaces the source tree while user data (`models/`, `custom_nodes/`, `input/`, `output/`, `user/`) lives outside the source directory and is untouched.
 
 ## Configuration
 
@@ -78,20 +78,23 @@ All configuration is done via environment variables. Set them before running `co
 COMFYUI_PYTHON=3.12 comfyui-init   # Use Python 3.12 instead of 3.13
 ```
 
-Separate venvs are created per Python version (`venv-py3.13`, `venv-py3.12`).
-
 ### PyTorch CUDA Variant
 
-```bash
-COMFYUI_TORCH_VARIANT=cu128 comfyui-init  # For RTX 50-series (Blackwell)
-COMFYUI_TORCH_VARIANT=cpu comfyui-init     # CPU-only, no CUDA
+The CUDA variant is configured in `pyproject.toml` (default: cu130). To change it, edit the `[[tool.uv.index]]` URL:
+
+```toml
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"  # or cu130, cpu
+explicit = true
 ```
 
-| Value | GPU |
-|---|---|
-| `cu130` (default) | NVIDIA (RTX 40-series and older) |
-| `cu128` | NVIDIA RTX 50-series (Blackwell) |
-| `cpu` | No GPU |
+Then regenerate the lockfile and re-sync:
+
+```bash
+uv lock
+comfyui-init  # or: uv sync
+```
 
 ### Network
 
@@ -106,28 +109,34 @@ COMFYUI_PORT=9000 comfyui          # Use a different port
 |---|---|---|
 | `COMFYUI_STATE_DIR` | `$PWD/.comfyui-state` | Root directory for all state |
 | `COMFYUI_PYTHON` | `3.13` | Python version (`3.13` or `3.12`) |
-| `COMFYUI_TORCH_VARIANT` | `cu130` | PyTorch index variant (`cu130`, `cu128`, `cpu`) |
 | `COMFYUI_LISTEN` | `127.0.0.1` | Listen address |
 | `COMFYUI_PORT` | `8188` | Listen port |
 | `COMFYUI_HOME` | `$STATE_DIR/src` | ComfyUI source directory |
-| `COMFYUI_VENV` | `$STATE_DIR/venv-py$VER` | venv directory |
 | `COMFYUI_ENABLE_MANAGER` | `1` | Enable ComfyUI Manager (`0` to disable) |
 
 ## Project Structure
 
 ```
 .
+├── pyproject.toml          # Dependency management
+├── uv.lock                 # Lockfile (committed)
 ├── flake.nix
 ├── flake.lock
-└── .comfyui-state/          # Created by comfyui-init (gitignored)
-    ├── src/                  # ComfyUI source (writable copy)
-    │   ├── models/           # Model files
-    │   ├── custom_nodes/     # Custom node extensions
-    │   ├── input/            # Input images
-    │   ├── output/           # Generated outputs
-    │   └── ...
-    └── venv-py3.13/          # Python virtual environment
+└── .comfyui-state/         # Created by comfyui-init (gitignored)
+    ├── src/                # ComfyUI source (replaced on update)
+    │   ├── extra_model_paths.yaml
+    │   ├── custom_nodes/ → ../../custom_nodes  (symlink)
+    │   ├── input/ → ../../input                (symlink)
+    │   ├── output/ → ../../output              (symlink)
+    │   └── user/ → ../../user                  (symlink)
+    ├── models/             # Model files (86GB+)
+    ├── custom_nodes/       # Custom node extensions
+    ├── input/              # Input images
+    ├── output/             # Generated outputs
+    └── user/               # User settings
 ```
+
+Models are referenced via `extra_model_paths.yaml`. Other user data directories are symlinked from the source tree.
 
 ## License
 
