@@ -7,8 +7,7 @@ ComfyUI Desktop does not ship Linux builds. This flake provides a reproducible, 
 ## Features
 
 - **Reproducible dependencies** -- `pyproject.toml` + `uv.lock` ensure exact, lockfile-pinned installs via `uv sync`
-- **Separated user data** -- models (86GB+), custom_nodes, input, output, user live outside the source tree under `.comfyui-state/`, so updates are a simple source replacement
-- **Python version switching** -- Python 3.13 (default) or 3.12 via environment variable
+- **Separated user data** -- models, custom_nodes, input, output, user live outside the source tree under `.comfyui-state/`, so updates are a simple source replacement
 - **direnv-friendly** -- drop an `.envrc` with `use flake` and everything is ready
 - **ComfyUI Manager** enabled by default
 
@@ -64,6 +63,9 @@ nix flake update comfyui-src
 
 # 2. Apply the update (re-enters dev shell with new derivation, then updates local source)
 comfyui-update
+
+# 3. Sync dependency changes from upstream requirements.txt
+./sync-requirements.sh
 ```
 
 `comfyui-update` replaces the source tree while user data (`models/`, `custom_nodes/`, `input/`, `output/`, `user/`) lives outside the source directory and is untouched.
@@ -71,12 +73,6 @@ comfyui-update
 ## Configuration
 
 All configuration is done via environment variables. Set them before running `comfyui-init` or `comfyui`.
-
-### Python Version
-
-```bash
-COMFYUI_PYTHON=3.12 comfyui-init   # Use Python 3.12 instead of 3.13
-```
 
 ### PyTorch CUDA Variant
 
@@ -108,7 +104,6 @@ COMFYUI_PORT=9000 comfyui          # Use a different port
 | Variable | Default | Description |
 |---|---|---|
 | `COMFYUI_STATE_DIR` | `$PWD/.comfyui-state` | Root directory for all state |
-| `COMFYUI_PYTHON` | `3.13` | Python version (`3.13` or `3.12`) |
 | `COMFYUI_LISTEN` | `127.0.0.1` | Listen address |
 | `COMFYUI_PORT` | `8188` | Listen port |
 | `COMFYUI_HOME` | `$STATE_DIR/src` | ComfyUI source directory |
@@ -124,19 +119,19 @@ COMFYUI_PORT=9000 comfyui          # Use a different port
 ├── flake.lock
 └── .comfyui-state/         # Created by comfyui-init (gitignored)
     ├── src/                # ComfyUI source (replaced on update)
-    │   ├── extra_model_paths.yaml
-    │   ├── custom_nodes/ → ../../custom_nodes  (symlink)
-    │   ├── input/ → ../../input                (symlink)
-    │   ├── output/ → ../../output              (symlink)
-    │   └── user/ → ../../user                  (symlink)
-    ├── models/             # Model files (86GB+)
+    │   ├── custom_nodes/ → ../custom_nodes  (symlink)
+    │   ├── input/ → ../input                (symlink)
+    │   ├── output/ → ../output              (symlink)
+    │   ├── user/ → ../user                  (symlink)
+    │   └── models/ → ../models              (symlink)
+    ├── models/             # Model files
     ├── custom_nodes/       # Custom node extensions
     ├── input/              # Input images
     ├── output/             # Generated outputs
     └── user/               # User settings
 ```
 
-Models are referenced via `extra_model_paths.yaml`. Other user data directories are symlinked from the source tree.
+All user data directories are symlinked from the source tree into `.comfyui-state/`.
 
 ## License
 

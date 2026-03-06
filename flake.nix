@@ -1,5 +1,5 @@
 {
-  description = "ComfyUI dev env (uv project; separated user data; py3.13 default w/ 3.12 switch)";
+  description = "ComfyUI dev env (uv project; separated user data)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -14,14 +14,12 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        python312 = pkgs.python312;
-        python313 = pkgs.python313;
+        python = pkgs.python313;
         uv = pkgs.uv;
 
         basePkgs = with pkgs; [
           uv
-          python312
-          python313
+          python
           git
           ffmpeg
           aria2
@@ -40,21 +38,15 @@
           libGL
         ];
 
-        # Helper: resolve FLAKE_DIR at runtime (set by wrapper / devShell)
-        # All scripts expect FLAKE_DIR to point at the flake repo root.
-
         setupSourceScript = ''
-          # migrate_data: move real dirs from src/ to STATE_DIR/ (existing install)
           migrate_data() {
             local STATE_DIR="$1"
             local COMFYUI_HOME="$2"
             local DATA_DIRS=(custom_nodes input output user models)
 
             for d in "''${DATA_DIRS[@]}"; do
-              # Only migrate if it's a real directory (not already a symlink)
               if [ -d "$COMFYUI_HOME/$d" ] && [ ! -L "$COMFYUI_HOME/$d" ]; then
                 if [ -d "$STATE_DIR/$d" ] && [ -n "$(ls -A "$STATE_DIR/$d" 2>/dev/null)" ]; then
-                  # State dir already has data — merge (src files won't overwrite)
                   cp -a --no-clobber "$COMFYUI_HOME/$d/." "$STATE_DIR/$d/" 2>/dev/null || true
                 else
                   mkdir -p "$STATE_DIR"
@@ -64,35 +56,29 @@
             done
           }
 
-          # setup_links: create symlinks + extra_model_paths.yaml inside src/
           setup_links() {
             local STATE_DIR="$1"
             local COMFYUI_HOME="$2"
 
-            # Ensure state-side dirs exist
             local DATA_DIRS=(custom_nodes input output user models)
             for d in "''${DATA_DIRS[@]}"; do
               mkdir -p "$STATE_DIR/$d"
             done
 
-            # Symlink all data dirs (custom_nodes, input, output, user, models)
             for d in custom_nodes input output user models; do
               rm -rf "''${COMFYUI_HOME:?}/$d"
               ln -sfn "../$d" "$COMFYUI_HOME/$d"
             done
           }
 
-          # setup_source: fresh install — copy source, seed data, set up links
           setup_source() {
             local STATE_DIR="$1"
             local COMFYUI_HOME="$2"
 
-            # Copy ComfyUI source
             mkdir -p "$(dirname "$COMFYUI_HOME")"
             cp -a "${comfyui-src}" "$COMFYUI_HOME"
             chmod -R u+rwX "$COMFYUI_HOME" || true
 
-            # Seed user-data dirs from source defaults (only if state dir is empty)
             local SEED_DIRS=(custom_nodes input output user models)
             for d in "''${SEED_DIRS[@]}"; do
               mkdir -p "$STATE_DIR/$d"
@@ -105,6 +91,13 @@
           }
         '';
 
+        uvSync = ''
+          uv sync --project "$FLAKE_DIR" --python "${python}/bin/python"
+          if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
+            uv sync --project "$FLAKE_DIR" --python "${python}/bin/python" --extra manager
+          fi
+        '';
+
         comfyui-init = pkgs.writeShellApplication {
           name = "comfyui-init";
           runtimeInputs = basePkgs;
@@ -115,25 +108,13 @@
             STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
             COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
 
-            COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
-            case "$COMFYUI_PYTHON" in
-              3.13) PY_BIN="${python313}/bin/python" ;;
-              3.12) PY_BIN="${python312}/bin/python" ;;
-              *)
-                echo "Unsupported COMFYUI_PYTHON=$COMFYUI_PYTHON (use 3.13 or 3.12)"
-                exit 2
-                ;;
-            esac
-
             mkdir -p "$STATE_DIR"
 
             ${setupSourceScript}
 
             if [ ! -d "$COMFYUI_HOME" ]; then
-              # Fresh install
               setup_source "$STATE_DIR" "$COMFYUI_HOME"
             elif [ -d "$COMFYUI_HOME/models" ] && [ ! -L "$COMFYUI_HOME/models" ]; then
-              # Existing install without symlinks — migrate data out, then set up links
               echo "Migrating user data from source tree..."
               migrate_data "$STATE_DIR" "$COMFYUI_HOME"
               setup_links "$STATE_DIR" "$COMFYUI_HOME"
@@ -148,13 +129,7 @@
               fi
             done
 
-            # Install dependencies via uv sync (project-managed venv)
-            uv sync --project "$FLAKE_DIR" --python "$PY_BIN"
-
-            # Manager optional deps
-            if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
-              uv sync --project "$FLAKE_DIR" --python "$PY_BIN" --extra manager
-            fi
+            ${uvSync}
 
             echo "ComfyUI ready."
             echo "  Source: $COMFYUI_HOME"
@@ -172,16 +147,6 @@
             STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
             COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
 
-            COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
-            case "$COMFYUI_PYTHON" in
-              3.13) PY_BIN="${python313}/bin/python" ;;
-              3.12) PY_BIN="${python312}/bin/python" ;;
-              *)
-                echo "Unsupported COMFYUI_PYTHON=$COMFYUI_PYTHON (use 3.13 or 3.12)"
-                exit 2
-                ;;
-            esac
-
             if [ ! -d "$COMFYUI_HOME" ]; then
               echo "ComfyUI not found. Run: comfyui-init"
               exit 1
@@ -191,22 +156,15 @@
 
             echo "Updating ComfyUI source..."
 
-            # Migrate data out if this is an old-style install
             if [ -d "$COMFYUI_HOME/models" ] && [ ! -L "$COMFYUI_HOME/models" ]; then
               echo "Migrating user data from source tree first..."
               migrate_data "$STATE_DIR" "$COMFYUI_HOME"
             fi
 
-            # User data is outside src, so we can safely replace it
             rm -rf "$COMFYUI_HOME"
             setup_source "$STATE_DIR" "$COMFYUI_HOME"
 
-            # Re-sync dependencies
-            uv sync --project "$FLAKE_DIR" --python "$PY_BIN"
-
-            if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
-              uv sync --project "$FLAKE_DIR" --python "$PY_BIN" --extra manager
-            fi
+            ${uvSync}
 
             echo "ComfyUI updated."
             echo "  Source: $COMFYUI_HOME"
@@ -258,26 +216,14 @@
 
               export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-              # Detect flake directory from script location
               FLAKE_DIR="''${FLAKE_DIR:-$PWD}"
               export UV_CACHE_DIR="''${UV_CACHE_DIR:-$FLAKE_DIR/.cache/uv}"
               STATE_DIR="''${COMFYUI_STATE_DIR:-$FLAKE_DIR/.comfyui-state}"
               COMFYUI_HOME="''${COMFYUI_HOME:-$STATE_DIR/src}"
               VENV_DIR="$FLAKE_DIR/.venv"
 
-              COMFYUI_PYTHON="''${COMFYUI_PYTHON:-3.13}"
-              case "$COMFYUI_PYTHON" in
-                3.13) PY_BIN="${python313}/bin/python" ;;
-                3.12) PY_BIN="${python312}/bin/python" ;;
-                *)
-                  echo "Unsupported COMFYUI_PYTHON=$COMFYUI_PYTHON (use 3.13 or 3.12)"
-                  exit 2
-                  ;;
-              esac
-
               ${setupSourceScript}
 
-              # Init if needed
               if [ ! -x "$VENV_DIR/bin/python" ]; then
                 echo "First run: initializing ComfyUI..."
                 mkdir -p "$STATE_DIR"
@@ -290,11 +236,7 @@
                   setup_links "$STATE_DIR" "$COMFYUI_HOME"
                 fi
 
-                uv sync --project "$FLAKE_DIR" --python "$PY_BIN"
-
-                if [ "''${COMFYUI_ENABLE_MANAGER:-1}" = "1" ]; then
-                  uv sync --project "$FLAKE_DIR" --python "$PY_BIN" --extra manager
-                fi
+                ${uvSync}
               fi
 
               cd "$COMFYUI_HOME"
@@ -322,10 +264,9 @@
             export FLAKE_DIR="$PWD"
             export UV_CACHE_DIR="''${UV_CACHE_DIR:-$FLAKE_DIR/.cache/uv}"
             echo "ComfyUI dev shell"
-            echo "  init  : comfyui-init"
-            echo "  update: comfyui-update"
-            echo "  run   : comfyui"
-            echo "Switch Python: COMFYUI_PYTHON=3.12  (default 3.13)"
+            echo "  comfyui-init   — first-time setup"
+            echo "  comfyui-update — update source"
+            echo "  comfyui        — start"
           '';
         };
       });
