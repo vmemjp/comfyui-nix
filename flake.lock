@@ -3,11 +3,11 @@
     "comfyui-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1772787888,
-        "narHash": "sha256-14cUWrv3ghxjW2IUxaggxdjixSVFpKvMImNwctaDzRU=",
+        "lastModified": 1772920359,
+        "narHash": "sha256-wPPsXQytzpb7gSzE4dUT5JME/q03Z2g6pk9RidHNy8A=",
         "owner": "Comfy-Org",
         "repo": "ComfyUI",
-        "rev": "3b93d5d571cb3e018da65f822cd11b60202b11c2",
+        "rev": "a7a6335be538f55faa2abf7404c9b8e970847d1f",
         "type": "github"
       },
       "original": {
