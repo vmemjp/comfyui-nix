@@ -13,7 +13,7 @@ ComfyUI Desktop does not ship Linux builds. This flake provides a reproducible, 
 
 ## Tested On
 
-- NixOS 26.05.20260217.0182a36 (Yarara)
+- NixOS 26.05.20260302.cf59864 (Yarara)
 - NVIDIA RTX 4070
 
 ## Prerequisites
@@ -73,24 +73,6 @@ comfyui-update
 ## Configuration
 
 All configuration is done via environment variables. Set them before running `comfyui-init` or `comfyui`.
-
-### PyTorch CUDA Variant
-
-The CUDA variant is configured in `pyproject.toml` (default: cu130). To change it, edit the `[[tool.uv.index]]` URL:
-
-```toml
-[[tool.uv.index]]
-name = "pytorch"
-url = "https://download.pytorch.org/whl/cu128"  # or cu130, cpu
-explicit = true
-```
-
-Then regenerate the lockfile and re-sync:
-
-```bash
-uv lock
-comfyui-init  # or: uv sync
-```
 
 ### Network
 
