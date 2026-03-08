@@ -91,6 +91,14 @@ COMFYUI_PORT=9000 comfyui          # Use a different port
 | `COMFYUI_HOME` | `$STATE_DIR/src` | ComfyUI source directory |
 | `COMFYUI_ENABLE_MANAGER` | `1` | Enable ComfyUI Manager (`0` to disable) |
 
+## Downloading Models
+
+`aria2c` is included in the dev shell for fast parallel downloads:
+
+```bash
+aria2c -x 16 -s 16 -d .comfyui-state/models/checkpoints/ <URL>
+```
+
 ## Project Structure
 
 ```
