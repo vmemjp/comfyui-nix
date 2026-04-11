@@ -35,13 +35,13 @@ On the first run, this automatically sets up the venv via `uv sync`, installs de
 
 ### Using a dev shell (alternative)
 
-If you prefer separate init/run steps, or use direnv:
+If you prefer separate build/run steps, or use direnv:
 
 ```bash
 nix develop  # or: echo 'use flake' > .envrc && direnv allow
 
-comfyui-init  # first-time setup
-comfyui       # start ComfyUI
+comfyui-container-build  # first-time build (and after each upgrade)
+comfyui-pod              # start ComfyUI in the container
 ```
 
 ComfyUI starts at `http://127.0.0.1:8188` by default.
@@ -50,12 +50,11 @@ ComfyUI starts at `http://127.0.0.1:8188` by default.
 
 | Command | Description |
 |---|---|
-| `nix run .` | One-command bootstrap: init if needed, then start |
-| `comfyui-init` | First-time setup: copy source, create symlinks, `uv sync` dependencies (dev shell) |
-| `comfyui-update` | Update ComfyUI source and re-sync dependencies (user data is untouched) (dev shell) |
-| `comfyui` | Start ComfyUI (dev shell) |
-| `comfyui-container-build` | Build the Podman container image (dev shell) |
+| `nix run .` | One-command bootstrap: build image if missing, then start the container |
+| `comfyui-container-build` | Build the Podman container image; tags `:latest` and `:<commit-short>` (dev shell) |
 | `comfyui-pod` | Start ComfyUI in an isolated Podman container (dev shell) |
+| `comfyui-native-init` | First-time setup for non-container mode: copy source, link data dirs, `uv sync` (dev shell) |
+| `comfyui-native` | Start ComfyUI without container isolation — PyPI packages run on the host (dev shell) |
 
 ## Container Mode (Podman)
 
@@ -124,7 +123,7 @@ podman rmi comfyui:bbfbe3f   # remove once you're sure you don't need it
 
 ## Configuration
 
-All configuration is done via environment variables. Set them before running `comfyui-init` or `comfyui`.
+All configuration is done via environment variables. Set them before running `comfyui-container-build` or `comfyui-pod`.
 
 ### Network
 
@@ -160,7 +159,7 @@ aria2c -x 16 -s 16 -d .comfyui-state/models/checkpoints/ <URL>
 ├── uv.lock                 # Lockfile (committed)
 ├── flake.nix
 ├── flake.lock
-└── .comfyui-state/         # Created by comfyui-init (gitignored)
+└── .comfyui-state/         # Created on first run (gitignored)
     ├── src/                # ComfyUI source (replaced on update)
     │   ├── custom_nodes/ → ../custom_nodes  (symlink)
     │   ├── input/ → ../input                (symlink)
