@@ -27,10 +27,16 @@ RUN git clone --depth 1 https://github.com/Comfy-Org/ComfyUI.git /app/src \
        fi
 
 # Create venv and install dependencies directly from upstream requirements.txt.
-# --extra-index-url picks up torch/torchvision/torchaudio wheels (with bundled CUDA)
-# from PyTorch's cu130 index; everything else comes from default PyPI.
+#
+# The PyTorch cu130 index also serves old (2022-era) wheels of common deps
+# like urllib3/requests/certifi, so using it as an extra-index with the
+# default "first-index" strategy causes those common deps to be resolved
+# from cu130 instead of PyPI. --index-strategy unsafe-best-match tells uv
+# to search both indexes and pick the newest version, which routes torch*
+# to cu130 (2.x+cu130 > 2.x base) while keeping urllib3 et al. on PyPI.
 RUN uv venv /app/.venv --python 3.13 \
     && uv pip install --python /app/.venv/bin/python \
+         --index-strategy unsafe-best-match \
          --extra-index-url https://download.pytorch.org/whl/cu130 \
          -r /app/src/requirements.txt \
     && uv pip install --python /app/.venv/bin/python \
