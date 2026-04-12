@@ -63,10 +63,21 @@
             PORT="''${COMFYUI_PORT:-8188}"
             LISTEN="''${COMFYUI_LISTEN:-127.0.0.1}"
             TAG="''${COMFYUI_TAG:-latest}"
+            NETWORK="''${COMFYUI_NETWORK:-default}"
 
             for d in models custom_nodes input output user; do
               mkdir -p "$STATE_DIR/$d"
             done
+
+            EXTRA_ARGS=()
+            if [ "$NETWORK" = "none" ]; then
+              EXTRA_ARGS+=("--network=none")
+              echo "NOTE: COMFYUI_NETWORK=none — container has no network."
+              echo "      Port mapping is disabled; the ComfyUI UI will NOT be reachable from the host."
+              echo "      Use this for paranoid smoke-tests of unvetted custom nodes."
+            else
+              EXTRA_ARGS+=("-p" "$LISTEN:$PORT:8188")
+            fi
 
             echo "Starting ComfyUI container (comfyui:$TAG) on $LISTEN:$PORT..."
 
@@ -75,7 +86,7 @@
               --device nvidia.com/gpu=all \
               --security-opt=label=disable \
               --shm-size=2g \
-              -p "$LISTEN:$PORT:8188" \
+              "''${EXTRA_ARGS[@]}" \
               -v "$STATE_DIR/models:/data/models:ro" \
               -v "$STATE_DIR/custom_nodes:/data/custom_nodes:ro" \
               -v "$STATE_DIR/input:/data/input:rw" \
@@ -100,6 +111,7 @@
               PORT="''${COMFYUI_PORT:-8188}"
               LISTEN="''${COMFYUI_LISTEN:-127.0.0.1}"
               TAG="''${COMFYUI_TAG:-latest}"
+              NETWORK="''${COMFYUI_NETWORK:-default}"
 
               # Build if the requested tag doesn't exist
               if ! podman image exists "comfyui:$TAG" 2>/dev/null; then
@@ -118,6 +130,15 @@
                 mkdir -p "$STATE_DIR/$d"
               done
 
+              EXTRA_ARGS=()
+              if [ "$NETWORK" = "none" ]; then
+                EXTRA_ARGS+=("--network=none")
+                echo "NOTE: COMFYUI_NETWORK=none — container has no network."
+                echo "      Port mapping is disabled; the ComfyUI UI will NOT be reachable from the host."
+              else
+                EXTRA_ARGS+=("-p" "$LISTEN:$PORT:8188")
+              fi
+
               echo "Starting ComfyUI container (comfyui:$TAG) on $LISTEN:$PORT..."
 
               exec podman run --rm -it \
@@ -125,7 +146,7 @@
                 --device nvidia.com/gpu=all \
                 --security-opt=label=disable \
                 --shm-size=2g \
-                -p "$LISTEN:$PORT:8188" \
+                "''${EXTRA_ARGS[@]}" \
                 -v "$STATE_DIR/models:/data/models:ro" \
                 -v "$STATE_DIR/custom_nodes:/data/custom_nodes:ro" \
                 -v "$STATE_DIR/input:/data/input:rw" \
@@ -146,10 +167,11 @@
             export FLAKE_DIR="$PWD"
             echo "ComfyUI dev shell"
             echo ""
-            echo "  comfyui-container-build         — build image (tags :latest and :<commit>)"
-            echo "  comfyui-pod                     — start :latest"
-            echo "  COMFYUI_TAG=<tag> comfyui-pod   — roll back to older build"
-            echo "  podman images comfyui           — list available tags"
+            echo "  comfyui-container-build             — build image (tags :latest and :<commit>)"
+            echo "  comfyui-pod                         — start :latest"
+            echo "  COMFYUI_TAG=<tag> comfyui-pod       — roll back to an older build"
+            echo "  COMFYUI_NETWORK=none comfyui-pod    — start offline (no network, no UI port)"
+            echo "  podman images comfyui               — list available tags"
           '';
         };
       });

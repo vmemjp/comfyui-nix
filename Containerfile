@@ -1,4 +1,7 @@
-FROM docker.io/ubuntu:24.04
+# Base image and uv are pinned by SHA256 digest so a compromise of
+# docker.io/ubuntu or ghcr.io/astral-sh/uv cannot quietly enter a
+# rebuild. Bump these intentionally (and review) when upgrading.
+FROM docker.io/ubuntu:24.04@sha256:e21f810fa78c09944446ec02048605eb3ab1e4e2e261c387ecc7456b38400d79
 
 ARG COMFYUI_COMMIT
 ARG DEBIAN_FRONTEND=noninteractive
@@ -10,8 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dev libglib2.0-0 libssl-dev libffi-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install uv — pinned to version tag + SHA256 digest
+COPY --from=ghcr.io/astral-sh/uv:0.11.6@sha256:43cb71695fcad1516c2fbe0f56e500184c42d8bce838d9f64593b8aff2c16298 /uv /usr/local/bin/uv
 
 # Let uv manage Python 3.13
 RUN uv python install 3.13
